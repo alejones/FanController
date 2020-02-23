@@ -1,0 +1,164 @@
+#include <Wire.h>
+#include <LCD.h>
+#include <LiquidCrystal_I2C.h>
+
+int slowSpin = 28;          // default temp that fan will start to spin 25c = 78f
+int fastSpin = 45;          // default temp that fan will spin full speed 32c = 90f
+const int potMaxTemp = 100;       // the max temp fastSpin can be set to with the pot
+const int potMinTemp = 10;        // the min temp slowSpin can be set with the pot
+const int numReadings = 10;       // number of itterations fo find avg temp
+const int pauseInterval = 1000;   // time between readings from tmp36 sensor
+const int tmpSensor = A0;   /*the analog pin the TMP36's Vout (sense) pin is connected to 
+                             the resolution is 10 mV / degree centigrade with a
+                             500 mV offset to allow for negative temperatures */
+const int ledPin = 13;      // pin the warning led is in
+const int maxPotPin = A1;   // pin the potenometer for the max temp is connected to. returns between 0 and 1024
+const int minPotPin = A2;   // pint the pot for the min temp is connected to. returns between 0 and 1024
+const int switchPin = 2; //the switch connect to pin 2
+int test = 0;
+float tempSteps = 1.0;
+int minPotValue = 1;
+int maxPotValue = 1;
+int tempC = 0;
+int speed = 0;
+
+
+#define I2C_ADDR 0x3F //Define I2C Address where the PCF8574A is
+#define BACKLIGHT_PIN 3
+#define En_pin 2
+#define Rw_pin 1
+#define Rs_pin 0
+#define D4_pin 4
+#define D5_pin 5
+#define D6_pin 6
+#define D7_pin 7
+
+LiquidCrystal_I2C lcd(I2C_ADDR, En_pin,Rw_pin,Rs_pin,D4_pin,D5_pin,D6_pin,D7_pin);
+
+// PWM output @ 25 kHz, only on pins 9 and 10.
+// Output value should be between 0 and 320, inclusive.
+void analogWrite25k(int pin, int value) {
+    switch (pin) {
+        case 9:
+            OCR1A = value;
+            break;
+        case 10:
+            OCR1B = value;
+            break;
+        default:
+            // no other pin will work
+            break;
+    }
+}
+
+//changes slowSping and fastSpin based on input from pot , int max
+void spinSpeeds() { 
+  int min = analogRead(minPotPin);
+  int max = analogRead(maxPotPin);
+  if (min == 0) {
+    min = min + 1.0;
+  }
+  slowSpin = (min * tempSteps) + potMinTemp;
+  fastSpin = (max * tempSteps) + potMinTemp;
+  if(slowSpin >= fastSpin){
+  fastSpin = slowSpin + 1;
+  }
+ 
+ lcd.clear(); 
+ lcd.setCursor (0,0);        // go to start of 1st line
+ lcd.print("S Spin:" + String(slowSpin) + " Tmp" + String(tempC));
+ lcd.setCursor (0,1);
+ lcd.print("F Spin:" + String(fastSpin) + " Spd" + String(speed));
+}
+
+//gets average temp from tmp36, returns float
+int getTemp(){
+   int average = 0;
+   int total = 0;
+   for (int i = 0; i < numReadings - 1; i++) {    //finds average reading from tmp36 sensor
+    total += analogRead(tmpSensor);
+    delay(pauseInterval); 
+  }
+  average = total / numReadings;        // finds average reading
+  float voltage = average * 5.0;        // converts the average reading into volts
+  voltage /= 1024.0;
+  int temp = ((voltage - 0.5) * -100);
+  return (temp); // converts volts in to tempature
+}
+
+// sets the speed of fan
+void setFanSpeed(int temperature) {
+  speed = 0;
+  
+  if (temperature < slowSpin) { // if temp is low don't turn on fan
+    speed = 0;
+    analogWrite25k(10, speed);
+  }
+  else if (temperature < fastSpin) {             // if temp is between slowSpin and fastSpin turn on
+    int val = (fastSpin - slowSpin);            // distance beteen fast and slowSpin
+    int perUnit = (320 / val);                  // max fan speed divided by distance between fSpin and sSpin
+    speed = perUnit * (temperature - slowSpin);        // increase fan speed propotional to increase in temp
+    analogWrite25k(10,speed);
+  }
+  else if (temperature > fastSpin) {
+    speed = 315;
+    analogWrite25k(10,speed);                    // if temp is about fastSpin turn fan on max speed
+  }
+
+  Serial.print("Fan Speed: ");
+  Serial.print(speed);
+  Serial.print("\n");
+  }
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(switchPin, INPUT); //initialize thebuttonPin as input
+  pinMode(ledPin, OUTPUT);
+  lcd.begin (16,2);
+  lcd.setBacklightPin(BACKLIGHT_PIN,POSITIVE);
+  lcd.setBacklight(HIGH);
+  lcd.home (); // go home
+  lcd.print("hello world");
+  tempSteps = potMaxTemp - potMinTemp; // find the value to multiply pot output by to get new f/sSpin
+  tempSteps = tempSteps / 1024;
+  
+    // Configure Timer 1 for PWM @ 25 kHz.
+    TCCR1A = 0;           // undo the configuration done by...
+    TCCR1B = 0;           // ...the Arduino core library
+    TCNT1  = 0;           // reset timer
+    TCCR1A = _BV(COM1A1)  // non-inverted PWM on ch. A
+           | _BV(COM1B1)  // same on ch; B
+           | _BV(WGM11);  // mode 10: ph. correct PWM, TOP = ICR1
+    TCCR1B = _BV(WGM13)   // ditto
+           | _BV(CS10);   // prescaler = 1
+    ICR1   = 320;         // TOP = 320
+
+    // Set the PWM pins as output.
+    pinMode( 9, OUTPUT);
+    pinMode(10, OUTPUT);
+}
+void loop() {
+  tempC = getTemp();
+  spinSpeeds();
+  setFanSpeed(tempC);
+  if (tempC > 31) {           // if temp is to high turn on led
+    digitalWrite(ledPin, HIGH);
+  }
+  else {                                // turn off led
+    digitalWrite(ledPin, LOW);
+  }
+  //read the state of the switch value
+  int switchState = digitalRead(switchPin);
+  if (switchState == HIGH ) //if it is,the state is HIGH
+  {
+    lcd.setBacklight(HIGH);
+  }
+  else
+  {
+    lcd.setBacklight(LOW);
+  }
+  
+  Serial.print("average: ");
+  Serial.print(tempC);
+  Serial.print("\n\n");
+}
